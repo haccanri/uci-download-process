@@ -1,2 +1,3 @@
 # Things TO DO
-[x] Folders should appear in a config.ini file.
+- [x] Folders should appear in a config.ini file.
+- [] Adding multiprocess options.
