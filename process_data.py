@@ -4,6 +4,7 @@ import shutil
 import configparser
 import pandas as pd
 import numpy as np
+import traceback
 from sklearn.preprocessing import LabelEncoder, LabelBinarizer
 from download_data import check_folder, remove_folder, read_config
 
@@ -14,7 +15,8 @@ separators = {'comma': ',',
               ' ': r'\s+',
               ';': ';',
               ',|': r'\,|\|',
-              ',[': r'\,|\['}
+              ',[': r'\,|\[',
+              '\t': '\t'}
 
 missing = {'?': np.nan,
            '-': np.nan,
@@ -27,11 +29,16 @@ min_target = 5
 
 
 def process_data(config_folder,
-                 processed_folder):
+                 processed_folder,
+                 multi_to_binary=True,
+                 shuffle=True):
     """
 
     :param str config_folder:
     :param str processed_folder:
+    :param bool multi_to_binary: whether convert multi-class classification
+        to binary classification
+    :param bool shuffle: whether shuffle data before dumping
     :return:
     """
     # Lists for possible errors
@@ -116,34 +123,34 @@ def process_data(config_folder,
                     if index_col is not None:
                         indices += index_col
                     indices = list(set(indices))
+                    # print('indices:', indices)
                     # Read data
                     try:
                         df = pd.read_csv(os.path.join(full_dir, data_file),
                                          sep=sep,
                                          index_col=index_col,
                                          usecols=indices,
-                                         header=None,
-                                         skiprows=skiprows,
-                                         engine='python')
+                                         header=header,
+                                         skiprows=skiprows)
                     except pd.errors.ParserError as e:
                         # Maybe there is a easier way
                         sk = int(re.findall(r'\d+', re.findall(r'line \d+', str(e))[0])[0]) - 1
                         df = pd.read_csv(os.path.join(full_dir, data_file),
                                          sep=sep,
                                          index_col=index_col,
-                                         header=None,
+                                         header=header,
                                          usecols=indices,
                                          skiprows=[skiprows, sk])
                     except UnicodeDecodeError as e:
                         df = pd.read_csv(os.path.join(full_dir, data_file),
                                          sep=sep,
                                          index_col=index_col,
-                                         header=None,
+                                         header=header,
                                          skiprows=skiprows,
                                          usecols=indices,
                                          encoding='utf-16le')
-                    if header is not None:
-                        df = df.iloc[header + 1:]
+                    # if header is not None:
+                    #     df = df.iloc[header + 1:]
                     if index_col is not None:
                         # Categoric columns after index reduce the numbers
                         new_categoric_indices = list()
@@ -165,38 +172,30 @@ def process_data(config_folder,
                             if label_column > main_index:
                                 label_column -= 1
                     # Renaming columns
-                    range_columns = list(set(categoric_indices + value_indices + [label_column]))
+                    range_columns = sorted(set(categoric_indices + value_indices + [label_column]))
                     df.columns = range_columns
-                    # # Changing label to last column
-                    # final_column = df.columns[-1]
-                    # if label_column != final_column:
-                    #     if label_column not in df.columns:
-                    #         raise KeyError('Label index {} is not in columns {}'.format(label_column, df.columns))
-                    #     a = df[final_column].copy()
-                    #     df[final_column] = df[label_column].copy()
-                    #     df[label_column] = a
-                    #     label_column = final_column
 
-                    # Now, final column is the column for the label
-                    if classification is True:
+                    # Encoding label
+                    if classification:
                         unique_target, unique_count = np.unique(df[label_column], return_counts=True)
                         if np.min(unique_count) < min_target:
                             raise ValueError('Original data doesn\'t has poor class distribution,', np.min(unique_count))
 
-                    if df[label_column].dtype != int and df[label_column].dtype != float:
-                        if 'regression' in config_folder:
-                            df[label_column] = pd.Series(df[label_column],
-                                                         dtype=np.float)
-                        else:
-                            le = LabelEncoder()
-                            try:
-                                df[label_column] = le.fit_transform([str(e).replace(' ', '')
-                                                                     for e in df[label_column]])
-                            except TypeError as e:
-                                df[label_column] = df[label_column].factorize()[0]
-                            df[label_column] = pd.Series(df[label_column] +
-                                                         (1 - np.min(df[label_column].values)),
-                                                     dtype=np.int)
+                        le = LabelEncoder()
+                        try:
+                            df[label_column] = le.fit_transform([str(e).replace(' ', '')
+                                                                    for e in df[label_column]])
+                            print('LabelEncoder params:', le.classes_)
+                            # print('df[label_column].describe():', df[label_column].describe())
+                        except TypeError as e:
+                            df[label_column] = df[label_column].factorize()[0]
+
+                        if multi_to_binary:
+                            df.loc[df[label_column] > 1, label_column] = 0
+
+                    if 'regression' in config_folder and df[label_column].dtype != float:
+                        df[label_column] = pd.Series(df[label_column], dtype=np.float)
+
                     # Store label column
                     label_series = df[label_column].copy()
                     df = df.drop(columns=label_column)
@@ -281,28 +280,37 @@ def process_data(config_folder,
                     # Restore label column. With this label, we assure this is at the end
                     df['Target'] = label_series
 
+                    # Shuffle
+                    if shuffle:
+                        df = df.sample(frac=1).reset_index(drop=True)
+
                     # Saving the dataframe into processed folder
-                    df.to_csv(os.path.join(processed_folder, data_file), sep=' ', header=False, index=False)
+                    df.to_csv(os.path.join(processed_folder, data_file), sep=',', header=True, index=False)
 
                 except ValueError as e:
                     print(' '.join([data_file, 'gives a ValueError:', str(e)]))
                     error_files.append(data_file)
+                    traceback.print_exc()
 
                 except pd.errors.ParserError as e:
                     print(' '.join([data_file, 'gives a parser error:', str(e)]))
                     error_files.append(data_file)
+                    traceback.print_exc()
 
                 except KeyError as e:
                     print(' '.join([data_file, 'gives a KeyError:', str(e)]))
                     error_files.append(data_file)
+                    traceback.print_exc()
 
                 except TypeError as e:
                     print(' '.join([data_file, 'gives a TypeError:', str(e)]))
                     error_files.append(data_file)
+                    traceback.print_exc()
 
                 except IndexError as e:
                     print(' '.join([data_file, 'separator is not correct:', str(e)]))
                     error_files.append(data_file)
+                    traceback.print_exc()
 
             else:
                 if config_file is None:
@@ -334,6 +342,12 @@ if __name__ == '__main__':
     remove_older = eval(parameter_config.get('PROCESS',
                                              'remove_older',
                                              fallback='True'))
+    shuffle = eval(parameter_config.get('PROCESS',
+                                        'shuffle',
+                                        fallback='True'))
+    multi_to_binary = eval(parameter_config.get('PROCESS',
+                                                'multi_to_binary',
+                                                fallback='True'))
 
     for config_folder in config_folders:
         data_type = config_folder.split('/')[1]
@@ -345,4 +359,3 @@ if __name__ == '__main__':
 
         process_data(config_folder=config_folder,
                      processed_folder=processed_folder)
-        print()

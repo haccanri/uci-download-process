@@ -7,19 +7,22 @@ from copy import deepcopy
 from download_data import check_folder, remove_folder, read_config
 
 
-def description_classification(full_data_files, description_folder):
+def description_classification(full_data_files,
+                               description_folder,
+                               sep=',',
+                               header=0):
     data_list = list()
     for d in full_data_files:
         name = d.split('/')[2].split('.')[0]
         df = pd.read_csv(d,
-                         sep='\s+',
-                         header=None)
+                         sep=sep,
+                         header=header)
         lines, columns = df.shape
         attribute = columns - 1  # Minus one because of target
         last_pos = attribute
-        classes = np.unique(df[last_pos])
+        classes = np.unique(df.iloc[:, last_pos])
         n_classes = len(classes)
-        distribution_list = [len(df[df[last_pos] == c]) for c in classes]
+        distribution_list = [len(df[df.iloc[:, last_pos] == c]) for c in classes]
         distribution_list.sort(reverse=True)
         distribution = tuple(distribution_list)
         data_list.append({'Dataset': name,
@@ -110,13 +113,16 @@ def description_classification(full_data_files, description_folder):
                                   'data_description'), clean_tex=False)
 
 
-def description_regression(full_data_files, description_folder):
+def description_regression(full_data_files,
+                           description_folder,
+                           sep=',',
+                           header=0):
     data_list = list()
     for d in full_data_files:
         name = d.split('/')[2].split('.')[0]
         df = pd.read_csv(d,
-                         sep='\s+',
-                         header=None)
+                         sep=sep,
+                         header=header)
         lines, columns = df.shape
         attribute = columns - 1  # Minus one because of target
         data_list.append({'Dataset': name,
@@ -186,8 +192,11 @@ if __name__ == '__main__':
                                              fallback='True'))
 
     for data_folder in data_folders:
-        data_type = os.path.split(data_folder)[1]
-        full_data_files = glob.glob(data_folder + '/*/*.data')
+        data_type = os.path.split(data_folder)[-1]
+        full_data_files = glob.glob(data_folder + '/**/*.data', recursive=True)
+        if len(full_data_files) == 0:
+            print(f'no .data file found in {data_folder}')
+            continue
         description_folder_type = os.path.join(description_folder,
                                                data_type)
         # Remove and create folder
@@ -195,7 +204,7 @@ if __name__ == '__main__':
             remove_folder(description_folder_type)
         check_folder(description_folder_type)
 
-        if data_type == 'classification':
+        if 'classification' in data_type:
             description_classification(full_data_files, description_folder_type)
         else:
             description_regression(full_data_files, description_folder_type)
